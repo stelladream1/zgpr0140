@@ -1,0 +1,68 @@
+*&---------------------------------------------------------------------*
+*& Include          ZGPR0140I01
+*&---------------------------------------------------------------------*
+*&---------------------------------------------------------------------*
+*&      Module  EXIT  INPUT
+*&---------------------------------------------------------------------*
+MODULE EXIT INPUT.
+  PERFORM EXIT.
+
+ENDMODULE.                 " EXIT  INPUT
+*&---------------------------------------------------------------------*
+*&      Module  CANC  INPUT
+*&---------------------------------------------------------------------*
+MODULE CANC INPUT.
+  PERFORM CANC.
+ENDMODULE.                 " CANC  INPUT
+*&---------------------------------------------------------------------*
+*&      Module  USER_COMMAND_0100  INPUT
+*&---------------------------------------------------------------------*
+MODULE USER_COMMAND INPUT.
+  PERFORM USER_CAMMAND.
+ENDMODULE.                 " USER_COMMAND_0100  INPUT
+*&---------------------------------------------------------------------*
+*&      Form  EXIT
+*&---------------------------------------------------------------------*
+FORM EXIT.
+  CLEAR: GV_OK_CODE.
+  GV_OK_CODE = GV_OKCODE.
+  CASE SY-DYNNR.
+    WHEN '0100' OR '0200'.
+      CASE GV_OK_CODE.
+        WHEN  GC_EXIT OR
+              GC_BACK.
+
+          LEAVE TO SCREEN 0.
+      ENDCASE.
+    WHEN OTHERS .
+  ENDCASE.
+ENDFORM.                    " EXIT
+*&---------------------------------------------------------------------*
+*&      Form  CANC
+*&---------------------------------------------------------------------*
+FORM CANC.
+  GV_OK_CODE = GV_OKCODE.
+
+  CASE SY-DYNNR.
+    WHEN '0100' OR '0200'.
+      CASE GV_OK_CODE.
+        WHEN GC_CANC OR GC_BACK.
+          LEAVE TO SCREEN 0.
+      ENDCASE.
+  ENDCASE.
+ENDFORM.                    " CANC
+*&---------------------------------------------------------------------*
+*&      Form  USER_CAMMAND
+*&---------------------------------------------------------------------*
+FORM USER_CAMMAND.
+  GV_OK_CODE = GV_OKCODE.
+  CLEAR GV_OKCODE.
+
+  CASE SY-DYNNR.
+    WHEN '0100' OR '0200'.
+      CASE GV_OK_CODE.
+        WHEN GC_SAVE.
+
+      ENDCASE.
+  ENDCASE.
+ENDFORM.                    " USER_CAMMAND
