@@ -1,0 +1,741 @@
+*&---------------------------------------------------------------------*
+*& Include          ZGPR0140F01
+*&---------------------------------------------------------------------*
+*&---------------------------------------------------------------------*
+*&      Form  AT_SELECTION_SCREEN
+*&---------------------------------------------------------------------*
+FORM at_selection_screen .
+  DATA:
+    l_result TYPE	sysubrc,
+    l_msg    TYPE	string,
+    l_check.
+
+  IF NOT p_tabnam IS INITIAL.
+*    "IF p_tabnam(1) NE 'Z'.
+*    IF p_tabnam(1) NE 'Z' and sy-uname(1) NE 'Z'.
+*      MESSAGE e001(00) WITH 'CBO Table만 사용할 수 있습니다'.
+*    ENDIF.
+
+    SELECT SINGLE * FROM dd02l
+    WHERE tabname  EQ p_tabnam
+      AND tabclass EQ 'TRANSP'.
+    IF sy-subrc NE 0.
+      MESSAGE e001(00)  WITH '입력하신 테이블은 존재하지 않습니다.'(e02).
+
+    ENDIF.
+    SELECT SINGLE ddtext
+      INTO p_ddtext
+      FROM dd02t
+     WHERE tabname = p_tabnam.
+
+
+  ELSE.
+    MESSAGE s000 WITH 'Table명을 입력하세요' DISPLAY LIKE 'E'.
+  ENDIF.
+
+  IF rb_upd = 'X'.
+    IF p_file IS INITIAL.
+      MESSAGE s000 WITH 'File path를 입력하세요' DISPLAY LIKE 'E'.
+    ENDIF.
+  ENDIF.
+
+
+  CASE sscrfields-ucomm.
+    WHEN 'FC01'. "
+      SET PARAMETER ID 'DTB' FIELD p_tabnam.
+      CHECK p_tabnam <> ''.
+      CALL FUNCTION 'RS_TABLE_LIST_CREATE'
+        EXPORTING
+          table_name = p_tabnam.
+    WHEN 'FC02'.
+      PERFORM check_table_type USING p_tabnam "전송대상 As-Is 테이블
+                            CHANGING gv_error.
+      CHECK gv_error IS INITIAL.
+      IF  gt_text[]  IS INITIAL.
+        PERFORM free_selections USING p_tabnam.
+      ELSE.
+        MESSAGE s002 WITH '추가조건에서 WHERE 조건을 입력하였습니다.'
+                          '선택조건 OR 추가조건' '하나만 WHERE조건이 가능합니다' DISPLAY LIKE 'E'.
+        EXIT.
+      ENDIF.
+    WHEN 'WHR'.
+      IF gt_twhere[]  IS  INITIAL.
+        PERFORM text_edit_get.
+      ELSE.
+        MESSAGE s002 WITH '선택조건에서 WHERE 조건을 입력하였습니다.'
+                          '선택조건 OR 추가조건' '하나만 WHERE조건이 가능합니다' DISPLAY LIKE 'E'.
+        EXIT.
+      ENDIF.
+  ENDCASE.
+  IF gt_twhere[] IS INITIAL.
+    sscrfields-functxt_02 = '@1F@선택조건'.
+  ELSE.
+    sscrfields-functxt_02 = '@1E@선택조건'.
+  ENDIF.
+
+
+
+ENDFORM.                    " AT_SELECTION_SCREEN
+*&---------------------------------------------------------------------*
+*&      Form  AT_SELECTION_SCREEN_OUTPUT
+*&---------------------------------------------------------------------*
+FORM at_selection_screen_output .
+
+  LOOP AT SCREEN.
+    IF screen-group1 = 'Z01'.
+      IF rb_upd = 'X'.
+        screen-active = 1.
+      ELSE.
+        screen-active = 0.
+      ENDIF.
+      MODIFY SCREEN.
+    ENDIF.
+  ENDLOOP.
+
+
+ENDFORM.                    " AT_SELECTION_SCREEN_OUTPUT
+*&---------------------------------------------------------------------*
+*&      Form  F4_HELP_FNAME
+*&---------------------------------------------------------------------*
+FORM f4_help_fname  CHANGING p_path.
+
+  DATA: l_filter TYPE string,
+        l_init   TYPE string,
+        l_rc     TYPE i.
+
+  DATA: filetable TYPE filetable,
+        ls_file   TYPE file_table.
+*----------------------------------------------------------------------*
+  IF p_path IS INITIAL.
+    l_init = 'C:\'.
+  ENDIF.
+
+*  CASE GC_X.
+*    WHEN P_EXCEL.
+*  l_filter = cl_gui_frontend_services=>filetype_excel.
+*    WHEN P_TEXT.
+  l_filter = cl_gui_frontend_services=>filetype_text.
+*  ENDCASE.
+
+  CALL METHOD cl_gui_frontend_services=>file_open_dialog
+    EXPORTING
+      default_extension       = '*.*'
+      file_filter             = l_filter
+      initial_directory       = l_init
+    CHANGING
+      file_table              = filetable
+      rc                      = l_rc
+    EXCEPTIONS
+      file_open_dialog_failed = 1
+      cntl_error              = 2
+      error_no_gui            = 3
+      not_supported_by_gui    = 4
+      OTHERS                  = 5.
+
+  IF sy-subrc = 0.
+    READ TABLE filetable INTO ls_file INDEX 1.
+    IF sy-subrc = 0.
+      p_path = ls_file-filename.
+    ENDIF.
+  ENDIF.
+
+ENDFORM.                    " F4_HELP_FNAME
+*&---------------------------------------------------------------------*
+*&      Form  START_OF_SELECTION
+*&---------------------------------------------------------------------*
+FORM start_of_selection .
+  IF p_tabnam IS INITIAL.
+    MESSAGE s000 WITH 'Table명을 입력하세요' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+
+  IF rb_upd = 'X'.
+    IF p_file IS INITIAL.
+      MESSAGE s000 WITH 'File path를 입력하세요' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+  ENDIF.
+
+* Make Internal Table FieldCatalog
+  PERFORM make_fieldcat USING p_tabnam
+                      CHANGING gt_fdcat1.
+
+
+
+  CHECK NOT gt_fdcat1[] IS INITIAL.
+
+* Make dynamic internal table
+  PERFORM make_internal_table.
+
+
+  IF rb_sel = 'X'. "데이터 조회
+    PERFORM processing_select_data.
+  ELSE.      "Excel Upload
+*   1. Upload file
+    CHECK NOT p_file IS INITIAL.
+    PERFORM file_upload_extension_type USING p_file.
+
+  ENDIF.
+
+
+ENDFORM.                    " START_OF_SELECTION
+*&---------------------------------------------------------------------*
+*&      Form  MAKE_FIELDCAT
+*&---------------------------------------------------------------------*
+FORM make_fieldcat  USING pv_tabnam
+                 CHANGING pt_fdcat TYPE lvc_t_fcat.
+
+  DATA:
+    l_col       TYPE int4,
+    l_structure TYPE dd02l-tabname.
+  DATA:
+    lv_col_pos   TYPE lvc_colpos,
+    lv_fieldname TYPE  lvc_fname.
+  CLEAR: pt_fdcat[] .
+
+  CHECK NOT pv_tabnam IS INITIAL.
+  l_structure = pv_tabnam.
+  CALL FUNCTION 'LVC_FIELDCATALOG_MERGE'
+    EXPORTING
+      i_buffer_active    = 'X'
+      i_bypassing_buffer = 'X'
+      i_structure_name   = l_structure
+    CHANGING
+      ct_fieldcat        = pt_fdcat[].
+
+  gs_fdcat-no_out = 'X'.
+  MODIFY pt_fdcat FROM gs_fdcat TRANSPORTING no_out WHERE datatype = 'CLNT'.
+  gt_fdcat2[] = pt_fdcat[].
+  DESCRIBE TABLE pt_fdcat LINES l_col.
+
+  LOOP AT gt_fdcat2 INTO gs_fdcat.
+
+    lv_col_pos      = gs_fdcat-col_pos.
+    lv_fieldname = gs_fdcat-fieldname.
+    CLEAR : gs_fdcat.
+    gs_fdcat-col_pos   = lv_col_pos.
+    gs_fdcat-fieldname = lv_fieldname.
+    gs_fdcat-inttype = 'C'.
+    gs_fdcat-intlen  = gs_fdcat-intlen + 5.
+    MODIFY gt_fdcat2 FROM gs_fdcat.
+    CLEAR:
+      lv_col_pos,
+      lv_fieldname.
+  ENDLOOP.
+
+*
+*
+*  CLEAR: GS_FDCAT.
+*  ADD 1 TO L_COL.
+*  GS_FDCAT-COL_POS     = L_COL .
+*  GS_FDCAT-FIELDNAME   = 'CELLSCOL'.
+*  GS_FDCAT-JUST        = 'C'.
+*  GS_FDCAT-REF_TABLE   = 'ZSFF0020'.
+*  GS_FDCAT-REF_FIELD   = 'COLTAB'.
+*  GS_FDCAT-NO_OUT      = 'X'.
+*  APPEND GS_FDCAT TO PT_FDCAT.
+*
+*  ADD 1 TO L_COL.
+*  CLEAR: GS_FDCAT.
+*  GS_FDCAT-COL_POS     = L_COL.
+*  GS_FDCAT-FIELDNAME   = 'CELLSTYL'.
+*  GS_FDCAT-JUST        = 'C'.
+*  GS_FDCAT-REF_TABLE   = 'ZSFF0020'.
+*  GS_FDCAT-REF_FIELD   = 'CELTAB'.
+*  GS_FDCAT-NO_OUT      = 'X'.
+*  APPEND GS_FDCAT TO PT_FDCAT.
+
+
+
+ENDFORM.                    " MAKE_FIELDCAT
+*&---------------------------------------------------------------------*
+*&      Form  INITIALIZATION
+*&---------------------------------------------------------------------*
+FORM initialization .
+  sscrfields-functxt_01 = '테이블조회'.
+  sscrfields-functxt_02 = '@1F@선택조건'.
+
+  PERFORM icon_create USING icon_filter_undo
+                            'WHERE 조건'
+                            'WHERE 조건문'
+                   CHANGING where.
+
+ENDFORM.                    " INITIALIZATION
+*&---------------------------------------------------------------------*
+*&      Form  CHECK_TABLE_TYPE
+*&---------------------------------------------------------------------*
+FORM check_table_type  USING pv_tabnam
+                    CHANGING pv_check.
+
+
+  pv_check = 'X'.
+  CHECK NOT pv_tabnam IS INITIAL.
+
+  SELECT SINGLE * FROM dd02l
+     WHERE tabname = pv_tabnam
+     AND   as4local = 'A'.
+
+  IF sy-subrc = 0.
+    CASE dd02l-tabclass.
+      WHEN 'TRANSP'.  "트랜스패런트테이블
+        CLEAR: pv_check.
+      WHEN 'INTTAB'.  "구조
+        MESSAGE '구조는 사용 할 수 없습니다!' TYPE 'S'. EXIT.
+      WHEN 'CLUSTER'. "클러스터테이블
+*        MESSAGE '클러스터테이블은 사용 할 수 없습니다!' TYPE 'S'. EXIT.
+      WHEN 'POOL'.    "풀테이블
+        MESSAGE '풀테이블은 사용 할 수 없습니다!' TYPE 'S'. EXIT.
+      WHEN 'VIEW'.    "일반뷰구조
+        MESSAGE '일반뷰구조는 사용 할 수 없습니다!' TYPE 'S'. EXIT.
+      WHEN 'APPEND'.  "추가구조
+        MESSAGE '추가구조는 사용 할 수 없습니다!' TYPE 'S'. EXIT.
+    ENDCASE.
+  ELSE.
+    MESSAGE '존재하지 않는 테이블입니다!' TYPE 'S'. EXIT.
+  ENDIF.
+ENDFORM.                    " CHECK_TABLE_TYPE
+*&---------------------------------------------------------------------*
+*&      Form  FREE_SELECTIONS
+*&---------------------------------------------------------------------*
+FORM free_selections  USING    pv_tabnam.
+
+  DATA l_title LIKE sy-title.
+*----------------------------------------------------------------------*
+  DATA: BEGIN OF lt_twhere OCCURS 0,
+          tablename LIKE rsdstabs-prim_tab,
+          where_tab LIKE rsdswhere OCCURS 0,
+        END OF lt_twhere.
+
+  DATA: BEGIN OF lt_texpr OCCURS 0,
+          tablename LIKE rsdstabs-prim_tab,
+          expr_tab  LIKE rsdsexpr OCCURS 0,
+        END OF lt_texpr.
+
+  DATA: BEGIN OF lt_frange OCCURS 0,
+          fieldname LIKE rsdstabs-prim_fname,
+          selopt_t  LIKE rsdsselopt OCCURS 0,
+        END OF lt_frange.
+
+  DATA: BEGIN OF lt_trange OCCURS 0,
+          tablename LIKE rsdstabs-prim_tab,
+          frange_t  LIKE lt_frange OCCURS 0,
+        END OF lt_trange.
+
+  DATA: lt_tabs   LIKE rsdstabs OCCURS  0 WITH HEADER LINE,
+        lt_fields LIKE rsdsfields OCCURS 0 WITH HEADER LINE.
+
+
+  DATA: l_selid  LIKE rsdynsel-selid,
+        l_pdscnt LIKE sy-tfill.
+
+
+  CLEAR: gt_twhere,gt_twhere[].
+
+  "Tables and any differing field names for dynamic selections
+  lt_tabs-prim_tab = pv_tabnam .
+  APPEND lt_tabs.
+
+  CALL FUNCTION 'FREE_SELECTIONS_INIT'
+    EXPORTING
+      expressions             = lt_texpr[]
+    IMPORTING
+      selection_id            = l_selid
+      where_clauses           = lt_twhere[]
+      expressions             = lt_texpr[]
+      field_ranges            = lt_trange[]
+      number_of_active_fields = l_pdscnt
+    TABLES
+      tables_tab              = lt_tabs
+      fields_tab              = lt_fields
+    EXCEPTIONS
+      OTHERS                  = 20.
+
+
+  l_title = pv_tabnam.
+  CALL FUNCTION 'FREE_SELECTIONS_DIALOG'
+    EXPORTING
+      selection_id            = l_selid
+      title                   = l_title
+      as_window               = 'X'  "X=Window, space=Full screen
+    IMPORTING
+      where_clauses           = gt_twhere[]
+      expressions             = lt_texpr[]
+      field_ranges            = lt_trange[]
+      number_of_active_fields = l_pdscnt
+    TABLES
+      fields_tab              = lt_fields
+    EXCEPTIONS
+      OTHERS                  = 5.
+
+ENDFORM.                    " FREE_SELECTIONS
+*&---------------------------------------------------------------------*
+*&      Form  TEXT_EDIT_GET
+*&---------------------------------------------------------------------*
+FORM text_edit_get .
+  CLEAR: gv_error.
+
+  DATA:  l_text   TYPE char10.
+  DATA: l_flag  TYPE char1,
+        l_lines TYPE i.
+*----------------------------------------------------------------------*
+
+  CLEAR:gt_text,gt_text[].
+  CLEAR: l_text,l_flag.
+
+  l_text   =  'WHERE 조건'.
+  CALL FUNCTION 'TERM_CONTROL_EDIT'
+    EXPORTING
+      titel          = l_text
+      langu          = sy-langu "'E'
+    TABLES
+      textlines      = gt_text
+    EXCEPTIONS
+      user_cancelled = 1
+      OTHERS         = 2.
+
+ENDFORM.                    " TEXT_EDIT_GET
+*&---------------------------------------------------------------------*
+*&      Form  PROCESSING_SELECT_DATA
+*&---------------------------------------------------------------------*
+FORM processing_select_data .
+  DATA : ls_error TYPE REF TO cx_root.
+  DATA : lv_error_txt TYPE text60.
+  DATA:
+    lv_select.
+
+  IF NOT gt_twhere[] IS INITIAL.  "상단 WHERE 조건절에 입력했을 경우
+    READ TABLE gt_twhere WITH KEY tablename = p_tabnam.
+    IF sy-subrc EQ 0.
+      gt_whc[] = gt_twhere-where_tab.
+    ENDIF.
+  ELSE."하단 버튼에 WHERE(TEXT)절을 입력했을경우
+    IF gt_text[]  IS NOT INITIAL.
+      "선택조건에서 WHERE 조건이 있었을때
+      LOOP AT gt_text.
+        FIND 'SELECT' IN gt_text-text.
+        IF  sy-subrc = 0.
+          lv_select  = 'X'.
+        ENDIF.
+        CONCATENATE ' '   gt_text-text    INTO gt_text-text SEPARATED BY space.
+        MODIFY gt_text.
+      ENDLOOP.
+      APPEND LINES OF gt_text TO gt_whc.
+    ENDIF.
+  ENDIF.
+
+  IF gt_whc[] IS INITIAL.
+    CONCATENATE 'MANDT ='
+                sy-mandt
+           INTO gt_whc-line
+           SEPARATED BY space.
+    APPEND gt_whc.
+  ENDIF.
+
+
+
+  IF lv_select = 'X'. "일반 쿼리
+    PERFORM make_sub_query.
+
+  ELSE.
+
+    TRY.
+        IF gt_whc[] IS INITIAL.
+          SELECT * INTO CORRESPONDING FIELDS OF TABLE <fs_table>
+                 FROM (p_tabnam) CLIENT SPECIFIED
+                 WHERE (gt_whc) .
+        ELSE.
+          SELECT * INTO CORRESPONDING FIELDS OF TABLE <fs_table>
+                 FROM (p_tabnam)
+                 WHERE (gt_whc) .
+        ENDIF.
+      CATCH cx_sy_open_sql_db  INTO ls_error.
+        lv_error_txt = ls_error->get_text( ).
+        MESSAGE lv_error_txt TYPE 'I'.
+        EXIT.
+      CATCH cx_sy_dynamic_osql_semantics  INTO ls_error.
+        lv_error_txt = ls_error->get_text( ).
+        MESSAGE lv_error_txt TYPE 'I'.
+        EXIT.
+      CLEANUP.
+    ENDTRY.
+
+  ENDIF.
+
+
+
+
+
+ENDFORM.                    " PROCESSING_SELECT_DATA
+*&---------------------------------------------------------------------*
+*&      Form  MAKE_INTERNAL_TABLE
+*&---------------------------------------------------------------------*
+FORM make_internal_table .
+
+  CHECK NOT <fs_table> IS ASSIGNED.
+  CHECK NOT gt_fdcat1[] IS INITIAL.
+
+* Create dynamic internal table and assign to FS
+  CALL METHOD cl_alv_table_create=>create_dynamic_table
+    EXPORTING
+*     I_STYLE_TABLE   = 'X'
+      it_fieldcatalog = gt_fdcat1
+*     I_LENGTH_IN_BYTE = 'X'
+    IMPORTING
+      ep_table        = gt_table.
+  ASSIGN gt_table->* TO <fs_table>.
+* Create dynamic work area and assign to FS
+  CREATE DATA gt_line LIKE LINE OF <fs_table>.
+  ASSIGN gt_line->* TO <fs_wa>.
+
+
+
+* 실제 테이블 Insert delete하기 위해
+* Create dynamic internal table and assign to FS
+  CALL METHOD cl_alv_table_create=>create_dynamic_table
+    EXPORTING
+*     I_STYLE_TABLE   = 'X'
+      it_fieldcatalog = gt_fdcat2
+*     I_LENGTH_IN_BYTE = 'X'
+    IMPORTING
+      ep_table        = gt_table2.
+  ASSIGN gt_table2->* TO <fs_table2>.
+* Create dynamic work area and assign to FS
+  CREATE DATA gt_line2 LIKE LINE OF <fs_table2>.
+  ASSIGN gt_line2->* TO <fs_wa2>.
+  ASSIGN gt_line2->* TO <fs_wa3>.
+
+
+ENDFORM.                    " MAKE_INTERNAL_TABLE
+*&---------------------------------------------------------------------*
+*&      Form  MAKE_SUB_QUERY
+*&---------------------------------------------------------------------*
+FORM make_sub_query .
+
+  TYPES: ty_source(90).
+
+  DATA: l_routine(32)  VALUE 'DYNAMIC_SELECT',
+        l_message(128),
+        l_line         TYPE i,
+        l_prog         TYPE sy-repid.
+
+  DATA: lt_isource TYPE TABLE OF ty_source,
+        ls_xsource TYPE ty_source.
+
+*----------------------------------------------------------------------*
+  CLEAR: l_message,l_line,l_prog,ls_xsource,lt_isource[].
+
+  ls_xsource = 'PROGRAM subpool.'.
+  APPEND ls_xsource TO lt_isource.
+
+  ls_xsource = 'FORM DYNAMIC_SELECT  TABLES PT_TABLE TYPE STANDARD TABLE.'.
+  APPEND ls_xsource TO lt_isource.
+
+
+  ls_xsource = 'DATA: L_TABNAM TYPE TABNAME16. '.
+  APPEND ls_xsource TO lt_isource.
+
+  CONCATENATE  'L_TABNAM =' ` '` p_tabnam `'` '.' INTO ls_xsource.
+  APPEND ls_xsource TO lt_isource.
+
+
+  ls_xsource = 'SELECT * INTO CORRESPONDING FIELDS OF TABLE PT_TABLE'.
+  APPEND ls_xsource TO lt_isource.
+
+  ls_xsource = 'FROM (L_TABNAM)'.
+  APPEND ls_xsource TO lt_isource.
+
+*.
+  ls_xsource =  'WHERE'.
+  APPEND ls_xsource TO lt_isource.
+  LOOP AT gt_whc.
+    IF gt_whc-line IS NOT INITIAL.
+      ls_xsource = gt_whc-line.
+      APPEND ls_xsource TO lt_isource.
+    ENDIF.
+  ENDLOOP.
+  ls_xsource =  '.'.
+  APPEND ls_xsource TO lt_isource.
+
+  ls_xsource = 'ENDFORM.'.
+  APPEND ls_xsource TO lt_isource.
+
+  GENERATE SUBROUTINE POOL lt_isource NAME l_prog
+                           MESSAGE l_message
+                           LINE l_line.
+
+  IF sy-subrc = 0.
+    PERFORM (l_routine) IN PROGRAM (l_prog) TABLES <fs_table>.
+  ELSE.
+    WRITE:/ l_message.
+  ENDIF.
+
+*  CALL FUNCTION 'RS_DELETE_PROGRAM'
+*    EXPORTING
+*      program = prog.
+
+
+ENDFORM.                    " MAKE_SUB_QUERY
+*&---------------------------------------------------------------------*
+*&      Form  FILE_UPLOAD_EXTENSION_TYPE
+*&---------------------------------------------------------------------*
+FORM file_upload_extension_type  USING pv_path.
+
+
+  DATA:
+    l_begin_col TYPE i,
+    l_begin_row TYPE i,
+    l_end_col   TYPE i,
+    l_end_row   TYPE i.
+  DATA:
+    lv_lines   TYPE i,
+    l_count    TYPE i,
+    l_xls_path LIKE rlgrap-filename.
+
+  DATA : ls_str  TYPE          string,
+         lt_itab TYPE TABLE OF string.
+
+* massive fi documents uploading excel format.
+  l_begin_col = 1.
+  l_begin_row = 1.
+  l_end_col   = 60.
+  l_end_row   = 65000.
+
+
+  l_count = strlen( pv_path ).
+* split.. <itab>.
+  SPLIT  pv_path AT '.' INTO TABLE lt_itab.
+
+  DESCRIBE TABLE lt_itab LINES lv_lines               .
+  READ     TABLE lt_itab INTO  ls_str   INDEX lv_lines.
+
+
+  CHECK sy-subrc EQ 0.
+
+  CASE ls_str.
+
+    WHEN 'XLS' OR 'XLSX' OR 'xls' OR 'xlsx'.
+      IF l_count > 128.
+        MESSAGE s000 WITH 'excel 파일 path는 128자리보다 짧아야 합니다.'.
+        LEAVE LIST-PROCESSING.
+      ENDIF.
+      l_xls_path = pv_path.
+      PERFORM call_f_excel_ole_to_convert USING  l_xls_path
+                                                 l_begin_col
+                                                 l_begin_row
+                                                 l_end_col
+                                                 l_end_row.
+
+    WHEN 'TXT' OR 'txt'.
+
+      PERFORM call_f_gui_upload  USING  pv_path.
+
+  ENDCASE.
+
+ENDFORM.                    " FILE_UPLOAD_EXTENSION_TYPE
+*&---------------------------------------------------------------------*
+*&      Form  CALL_F_EXCEL_OLE_TO_CONVERT
+*&---------------------------------------------------------------------*
+FORM call_f_excel_ole_to_convert  USING    pv_xls_path
+                                           pv_begin_col
+                                           pv_begin_row
+                                           pv_end_col
+                                           pv_end_row.
+
+  DATA: ls_data_tab(4096) TYPE c,
+        lt_data_tab       LIKE  ls_data_tab OCCURS 0.
+*  DATA: ls_result TYPE zsfg0020.
+  DATA: l_col TYPE kcd_ex_col_n.
+
+  DATA:
+    l_numc1 TYPE numc05,
+    l_numc2 TYPE char5,
+    l_numc3 TYPE char5.
+
+  FIELD-SYMBOLS : <intern> LIKE zrs_alsmex_tabline.
+
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+    EXPORTING
+*     I_FIELD_SEPERATOR    = 'X'
+      i_line_header        = 'X'
+      i_tab_raw_data       = lt_data_tab
+      i_filename           = pv_xls_path
+    TABLES
+      i_tab_converted_data = <fs_table2>
+    EXCEPTIONS
+      conversion_failed    = 1
+      OTHERS               = 2.
+  IF sy-subrc <> 0.
+* Implement suitable error handling here
+  ENDIF.
+
+  LOOP AT <fs_table2> INTO <fs_wa2>.
+    MOVE-CORRESPONDING <fs_wa2> TO <fs_wa>.
+    APPEND <fs_wa> TO <fs_table>.
+  ENDLOOP.
+*
+
+
+ENDFORM.                    " CALL_F_EXCEL_OLE_TO_CONVERT
+*&---------------------------------------------------------------------*
+*&      Form  CALL_F_GUI_UPLOAD
+*&---------------------------------------------------------------------*
+FORM call_f_gui_upload  USING   pv_path.
+
+
+  DATA : lv_filename       TYPE string,
+         lt_data_tab(4096) TYPE c OCCURS 0.
+
+  DATA:
+    l_numc1 TYPE numc05,
+    l_numc2 TYPE char5,
+    l_numc3 TYPE char5.
+
+  lv_filename = pv_path.
+  CALL FUNCTION 'GUI_UPLOAD'
+    EXPORTING
+      filename                = lv_filename
+      filetype                = 'ASC'
+      has_field_separator     = 'X'
+      codepage                = '8500'
+    TABLES
+      data_tab                = <fs_table>
+    EXCEPTIONS
+      file_open_error         = 1
+      file_read_error         = 2
+      no_batch                = 3
+      gui_refuse_filetransfer = 4
+      invalid_type            = 5
+      no_authority            = 6
+      unknown_error           = 7
+      bad_data_format         = 8
+      header_not_allowed      = 9
+      separator_not_allowed   = 10
+      header_too_long         = 11
+      unknown_dp_error        = 12
+      access_denied           = 13
+      dp_out_of_memory        = 14
+      disk_full               = 15
+      dp_timeout              = 16
+      OTHERS                  = 17.
+
+ENDFORM.                    " CALL_F_GUI_UPLOAD
+*&---------------------------------------------------------------------*
+*&      Form  END_OF_SELECTION
+*&---------------------------------------------------------------------*
+FORM end_of_selection .
+
+*  IF <fs_table> IS INITIAL.
+*    MESSAGE s017. "Dose not exist data!!
+*  ELSE.
+  CLEAR: g_totalline, g_filteredline.
+
+  DESCRIBE TABLE <fs_table> LINES g_totalline.
+  g_filteredline = g_totalline.
+
+  CONDENSE:
+     g_totalline,
+     g_filteredline.
+
+  CALL SCREEN 0100.
+*  ENDIF.
+ENDFORM.                    " END_OF_SELECTION
