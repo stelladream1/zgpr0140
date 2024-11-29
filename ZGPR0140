@@ -1,0 +1,49 @@
+*&---------------------------------------------------------------------*
+*& Report ZGPR0140
+*&---------------------------------------------------------------------*
+*& Auto samping master management
+*&---------------------------------------------------------------------*
+REPORT zgpr0140  MESSAGE-ID zgcm10.
+
+  INCLUDE zgpr0140T01.
+  INCLUDE zgpr0140C01.
+  INCLUDE zgpr0140F01.
+  INCLUDE zgpr0140O01.
+  INCLUDE zgpr0140I01.
+  INCLUDE zgpr0140F02.
+
+
+
+*-----------------------------------------------------------------------
+* AT SELECTION-SCREEN
+*-----------------------------------------------------------------------
+INITIALIZATION.
+  PERFORM INITIALIZATION.
+
+*-----------------------------------------------------------------------
+* AT SELECTION-SCREEN
+*-----------------------------------------------------------------------
+AT SELECTION-SCREEN.
+  PERFORM AT_SELECTION_SCREEN.
+
+***********************************************************************
+* AT SELECTION-SCREEN OUTPUT
+***********************************************************************
+AT SELECTION-SCREEN OUTPUT.
+  PERFORM AT_SELECTION_SCREEN_OUTPUT.
+
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR P_FILE.
+  PERFORM F4_HELP_FNAME     CHANGING P_FILE.
+
+*-----------------------------------------------------------------------
+* START-OF-SELECTION
+*-----------------------------------------------------------------------
+START-OF-SELECTION.
+  PERFORM START_OF_SELECTION.
+
+*-----------------------------------------------------------------------
+* END-OF-SELECTION
+*-----------------------------------------------------------------------
+END-OF-SELECTION.
+  PERFORM END_OF_SELECTION.
